@@ -42,4 +42,61 @@ for i = 1:numFrames
     windowedFrames(:, i) = rawFrame .* win;
 end
 
-disp(['Successfully extracted ', num2str(numFrames), ' windowed frames.']);
+
+
+% Find the next power of 2 for FFT computation
+NFFT = 2^nextpow2(frameLen); 
+
+% Pre-allocate memory for magnitude and phase matrices
+% Rows = frequency bins, Columns = individual frames
+magFrames = zeros(NFFT, numFrames);
+phaseFrames = zeros(NFFT, numFrames);
+
+
+for i = 1:numFrames
+    % Compute the FFT of the current windowed frame.
+    complexSpectrum = fft(windowedFrames(:, i), NFFT);
+    
+    magFrames(:, i) = abs(complexSpectrum);
+    phaseFrames(:, i) = angle(complexSpectrum);
+end
+
+
+% Initialize the noise profile with the very first frame (our best initial guess)
+adaptiveNoiseProfile = magFrames(:, 1);
+
+% Smoothing factor for the leaky integrator (typically between 0.90 and 0.99)
+% Higher = slower, smoother updates. Lower = reacts faster to changing noise.
+alpha_smooth = 0.95; 
+
+% VAD Threshold multiplier
+% If a frame's energy is less than this multiplier times the noise energy,
+% we assume it is just noise and update our profile.
+vadThreshold = 2.0; 
+
+
+cleanMagFrames = zeros(NFFT, numFrames);
+
+for i = 1:numFrames
+    currentMag = magFrames(:, i);
+    
+    % Calculate the total energy of the current frame and the current noise profile
+    frameEnergy = sum(currentMag.^2);
+    noiseEnergy = sum(adaptiveNoiseProfile.^2);
+    
+    % Voice Activity Detection (VAD)
+    if frameEnergy < (vadThreshold * noiseEnergy)
+        % No speech detected. Update the background noise estimate.
+        adaptiveNoiseProfile = (alpha_smooth * adaptiveNoiseProfile) + ((1 - alpha_smooth) * currentMag);
+    end
+    
+    % Spectral Subtraction (Using the continuously updated profile)
+    overSubtractionFactor = 2.0; % Alpha factor for subtraction
+    
+    % Subtract noise, and use max() to prevent negative magnitudes
+    cleanMag = max(currentMag - (overSubtractionFactor * adaptiveNoiseProfile), 0);
+    
+    
+    cleanMagFrames(:, i) = cleanMag;
+end
+

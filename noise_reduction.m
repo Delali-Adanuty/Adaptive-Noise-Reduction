@@ -93,8 +93,8 @@ for i = 1:numFrames
     
     % Spectral Subtraction with Flooring
     % Tune these two parameters to eliminate "musical noise"
-    alpha_overSub = 5.0;
-    beta_floor = 0.01;  
+    alpha_overSub = 3.0;
+    beta_floor = 0.1;  
     
     % Calculate the aggressive subtraction
     subtractedMag = currentMag - (alpha_overSub * adaptiveNoiseProfile);

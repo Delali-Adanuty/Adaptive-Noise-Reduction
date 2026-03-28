@@ -77,6 +77,7 @@ vadThreshold = 2.0;
 
 cleanMagFrames = zeros(NFFT, numFrames);
 
+% The Adaptive Subtraction Loop with Flooring
 for i = 1:numFrames
     currentMag = magFrames(:, i);
     
@@ -90,13 +91,21 @@ for i = 1:numFrames
         adaptiveNoiseProfile = (alpha_smooth * adaptiveNoiseProfile) + ((1 - alpha_smooth) * currentMag);
     end
     
-    % Spectral Subtraction (Using the continuously updated profile)
-    overSubtractionFactor = 2.0; % Alpha factor for subtraction
+    % Spectral Subtraction with Flooring
+    % Tune these two parameters to eliminate "musical noise"
+    alpha_overSub = 5.0;
+    beta_floor = 0.01;  
     
-    % Subtract noise, and use max() to prevent negative magnitudes
-    cleanMag = max(currentMag - (overSubtractionFactor * adaptiveNoiseProfile), 0);
+    % Calculate the aggressive subtraction
+    subtractedMag = currentMag - (alpha_overSub * adaptiveNoiseProfile);
+    
+    % Calculate the minimum allowed noise floor
+    spectralFloor = beta_floor * adaptiveNoiseProfile;
     
     
+    cleanMag = max(subtractedMag, spectralFloor);
+    
+    % Store the cleaned magnitude
     cleanMagFrames(:, i) = cleanMag;
 end
 

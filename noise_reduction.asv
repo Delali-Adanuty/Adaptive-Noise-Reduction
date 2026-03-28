@@ -77,6 +77,7 @@ vadThreshold = 2.0;
 
 cleanMagFrames = zeros(NFFT, numFrames);
 
+% The Adaptive Subtraction Loop with Flooring
 for i = 1:numFrames
     currentMag = magFrames(:, i);
     
@@ -90,43 +91,48 @@ for i = 1:numFrames
         adaptiveNoiseProfile = (alpha_smooth * adaptiveNoiseProfile) + ((1 - alpha_smooth) * currentMag);
     end
     
-    % Spectral Subtraction (Using the continuously updated profile)
-    overSubtractionFactor = 2.0; % Alpha factor for subtraction
+    % Spectral Subtraction with Flooring
+    % Tune these two parameters to eliminate "musical noise"
+    alpha_overSub = 3.0; % Try pushing this up (range: 2.0 to 5.0)
+    beta_floor = 0.05;   % Keep 5% of the noise to mask the screeching (range: 0.01 to 0.1)
     
-    % Subtract noise, and use max() to prevent negative magnitudes
-    cleanMag = max(currentMag - (overSubtractionFactor * adaptiveNoiseProfile), 0);
+    % Calculate the aggressive subtraction
+    subtractedMag = currentMag - (alpha_overSub * adaptiveNoiseProfile);
     
+    % Calculate the minimum allowed noise floor
+    spectralFloor = beta_floor * adaptiveNoiseProfile;
     
+    % Apply the floor instead of clamping to zero
+    cleanMag = max(subtractedMag, spectralFloor);
+    
+    % Store the cleaned magnitude
     cleanMagFrames(:, i) = cleanMag;
 end
 
-% --- 1. Pre-allocate Output Buffer ---
+
+
 % Calculate the total length of the final reconstructed audio array
 outputAudioLen = (numFrames - 1) * stepSize + frameLen;
 
 % Initialize the output buffer with zeros. 
-% In C, this would be your main audio output ring buffer.
 outputAudio = zeros(outputAudioLen, 1);
 
-% --- 2. The Reconstruction & OLA Loop ---
+
 for i = 1:numFrames
     % Get the cleaned magnitude and original phase for the current frame
     cleanMag = cleanMagFrames(:, i);
     origPhase = phaseFrames(:, i);
     
     % Recombine into a complex spectrum
-    % In MATLAB, '1i' is the imaginary unit
     complexFrame = cleanMag .* exp(1i * origPhase);
     
     % Compute Inverse FFT to transform back to the time domain
     timeFrame = ifft(complexFrame, NFFT);
     
     % Extract the real part to discard tiny floating-point rounding errors
-    % We also truncate the array back to 'frameLen' to remove the zero-padding 
-    % we added before the FFT.
     timeFrameReal = real(timeFrame(1:frameLen));
     
-    % --- 3. Overlap-Add Logic ---
+    
     % Calculate the exact indices in the global output buffer
     startIndex = (i - 1) * stepSize + 1;
     endIndex = startIndex + frameLen - 1;
@@ -143,9 +149,6 @@ if maxAmp > 0
     outputAudio = outputAudio / maxAmp;
 end
 
-disp('Overlap-Add reconstruction complete!');
 
-% You can now listen to the result:
-% sound(outputAudio, Fs);
-% Or save it:
-% audiowrite('cleaned_output.wav', outputAudio, Fs);
+% Save the audio
+audiowrite('cleaned_output.wav', outputAudio, Fs);

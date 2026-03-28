@@ -100,3 +100,46 @@ for i = 1:numFrames
     cleanMagFrames(:, i) = cleanMag;
 end
 
+
+
+% Calculate the total length of the final reconstructed audio array
+outputAudioLen = (numFrames - 1) * stepSize + frameLen;
+
+% Initialize the output buffer with zeros. 
+outputAudio = zeros(outputAudioLen, 1);
+
+
+for i = 1:numFrames
+    % Get the cleaned magnitude and original phase for the current frame
+    cleanMag = cleanMagFrames(:, i);
+    origPhase = phaseFrames(:, i);
+    
+    % Recombine into a complex spectrum
+    complexFrame = cleanMag .* exp(1i * origPhase);
+    
+    % Compute Inverse FFT to transform back to the time domain
+    timeFrame = ifft(complexFrame, NFFT);
+    
+    % Extract the real part to discard tiny floating-point rounding errors
+    timeFrameReal = real(timeFrame(1:frameLen));
+    
+    
+    % Calculate the exact indices in the global output buffer
+    startIndex = (i - 1) * stepSize + 1;
+    endIndex = startIndex + frameLen - 1;
+    
+    % Add the current reconstructed frame to whatever is already in the buffer
+    outputAudio(startIndex:endIndex) = outputAudio(startIndex:endIndex) + timeFrameReal;
+end
+
+
+% Normalize the output to fall within the standard [-1.0, 1.0] audio range 
+% to prevent digital clipping when playing or saving the file.
+maxAmp = max(abs(outputAudio));
+if maxAmp > 0
+    outputAudio = outputAudio / maxAmp;
+end
+
+
+% Save the audio
+audiowrite('cleaned_output.wav', outputAudio, Fs);

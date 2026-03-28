@@ -31,16 +31,121 @@ windowedFrames = zeros(frameLen, numFrames);
 
 % The Framing & Windowing Loop 
 for i = 1:numFrames
-    % Calculate the exact sample indices for the current frame
+    
     startIndex = (i - 1) * stepSize + 1;
     endIndex = startIndex + frameLen - 1;
     
     % Extract the raw audio chunk
     rawFrame = inputAudio(startIndex:endIndex);
     
-    % Apply the window function (element-wise multiplication)
-    % and store it in the matrix column
+    % Apply the window function
     windowedFrames(:, i) = rawFrame .* win;
 end
 
-disp(['Successfully extracted ', num2str(numFrames), ' windowed frames.']);
+
+
+% Find the next power of 2 for FFT computation
+NFFT = 2^nextpow2(frameLen); 
+
+% Pre-allocate memory for magnitude and phase matrices
+% Rows = frequency bins, Columns = individual frames
+magFrames = zeros(NFFT, numFrames);
+phaseFrames = zeros(NFFT, numFrames);
+
+
+for i = 1:numFrames
+    % Compute the FFT of the current windowed frame.
+    complexSpectrum = fft(windowedFrames(:, i), NFFT);
+    
+    magFrames(:, i) = abs(complexSpectrum);
+    phaseFrames(:, i) = angle(complexSpectrum);
+end
+
+
+% Initialize the noise profile with the very first frame (our best initial guess)
+adaptiveNoiseProfile = magFrames(:, 1);
+
+% Smoothing factor for the leaky integrator (typically between 0.90 and 0.99)
+% Higher = slower, smoother updates. Lower = reacts faster to changing noise.
+alpha_smooth = 0.95; 
+
+% VAD Threshold multiplier
+% If a frame's energy is less than this multiplier times the noise energy,
+% we assume it is just noise and update our profile.
+vadThreshold = 2.0; 
+
+
+cleanMagFrames = zeros(NFFT, numFrames);
+
+for i = 1:numFrames
+    currentMag = magFrames(:, i);
+    
+    % Calculate the total energy of the current frame and the current noise profile
+    frameEnergy = sum(currentMag.^2);
+    noiseEnergy = sum(adaptiveNoiseProfile.^2);
+    
+    % Voice Activity Detection (VAD)
+    if frameEnergy < (vadThreshold * noiseEnergy)
+        % No speech detected. Update the background noise estimate.
+        adaptiveNoiseProfile = (alpha_smooth * adaptiveNoiseProfile) + ((1 - alpha_smooth) * currentMag);
+    end
+    
+    % Spectral Subtraction (Using the continuously updated profile)
+    overSubtractionFactor = 2.0; % Alpha factor for subtraction
+    
+    % Subtract noise, and use max() to prevent negative magnitudes
+    cleanMag = max(currentMag - (overSubtractionFactor * adaptiveNoiseProfile), 0);
+    
+    
+    cleanMagFrames(:, i) = cleanMag;
+end
+
+% --- 1. Pre-allocate Output Buffer ---
+% Calculate the total length of the final reconstructed audio array
+outputAudioLen = (numFrames - 1) * stepSize + frameLen;
+
+% Initialize the output buffer with zeros. 
+% In C, this would be your main audio output ring buffer.
+outputAudio = zeros(outputAudioLen, 1);
+
+% --- 2. The Reconstruction & OLA Loop ---
+for i = 1:numFrames
+    % Get the cleaned magnitude and original phase for the current frame
+    cleanMag = cleanMagFrames(:, i);
+    origPhase = phaseFrames(:, i);
+    
+    % Recombine into a complex spectrum
+    % In MATLAB, '1i' is the imaginary unit
+    complexFrame = cleanMag .* exp(1i * origPhase);
+    
+    % Compute Inverse FFT to transform back to the time domain
+    timeFrame = ifft(complexFrame, NFFT);
+    
+    % Extract the real part to discard tiny floating-point rounding errors
+    % We also truncate the array back to 'frameLen' to remove the zero-padding 
+    % we added before the FFT.
+    timeFrameReal = real(timeFrame(1:frameLen));
+    
+    % --- 3. Overlap-Add Logic ---
+    % Calculate the exact indices in the global output buffer
+    startIndex = (i - 1) * stepSize + 1;
+    endIndex = startIndex + frameLen - 1;
+    
+    % Add the current reconstructed frame to whatever is already in the buffer
+    outputAudio(startIndex:endIndex) = outputAudio(startIndex:endIndex) + timeFrameReal;
+end
+
+
+% Normalize the output to fall within the standard [-1.0, 1.0] audio range 
+% to prevent digital clipping when playing or saving the file.
+maxAmp = max(abs(outputAudio));
+if maxAmp > 0
+    outputAudio = outputAudio / maxAmp;
+end
+
+disp('Overlap-Add reconstruction complete!');
+
+% You can now listen to the result:
+% sound(outputAudio, Fs);
+% Or save it:
+% audiowrite('cleaned_output.wav', outputAudio, Fs);

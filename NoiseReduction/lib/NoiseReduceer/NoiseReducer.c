@@ -1,40 +1,67 @@
 #include "NoiseReducer.h"
+#include "dsps_view.h"
 
-// --- Initialization ---
 void NoiseReducer_Init(NoiseReducer_State *state)
 {
-    // 1. Set the DSP Tuning Parameters
     state->alpha_overSub = 3.0f;
     state->beta_floor = 0.1f;
     state->alpha_smooth = 0.95f;
     state->vadThreshold = 2.0f;
 
-    // 2. Clear the Adaptive Noise Profile
-    for (int i = 0; i < NFFT_HALF; i++)
-    {
-        state->adaptiveNoiseProfile[i] = 0.0f;
-    }
+    // 1. Initialize the FFT lookup tables
+    dsps_fft2r_init_fc32(NULL, CONFIG_DSP_MAX_FFT_SIZE);
 
-    // 3. Clear the Overlap-Add Buffer
-    for (int i = 0; i < OVERLAP_LEN; i++)
-    {
-        state->previousOverlapBuffer[i] = 0.0f;
-    }
+    // 2. Pre-calculate Hann window
+    dsps_wind_hann_f32(state->window, FRAME_LEN);
+
+    // 3. Clear buffers
+    for (int i = 0; i < NFFT / 2; i++)
+        state->noise_profile[i] = 0;
 }
 
-// --- Main Processing Loop (Skeleton) ---
-void NoiseReducer_ProcessFrame(NoiseReducer_State *state, const float *inputFrame, float *outputFrame)
+void NoiseReducer_ProcessFrame(NoiseReducer_State *state, float *input, float *output)
 {
-    // 1. Apply Windowing (Hamming)
-    // 2. Compute FFT
-    // 3. VAD & Energy Tracking
-    // 4. Spectral Subtraction with Flooring
-    // 5. Compute Inverse FFT
-    // 6. Overlap-Add (OLA) Reconstruction
 
-    // For now, as a passthrough test, we just copy input to output
     for (int i = 0; i < FRAME_LEN; i++)
     {
-        outputFrame[i] = inputFrame[i];
+        state->fft_buffer[i * 2] = input[i] * state->window[i];
+        state->fft_buffer[i * 2 + 1] = 0;
+    }
+
+    // 2. Execute ESP32 Native FFT
+    dsps_fft2r_fc32(state->fft_buffer, NFFT);
+    dsps_bit_rev_fc32(state->fft_buffer, NFFT);
+
+    // 3. Simple Magnitude and Subtraction logic
+    for (int i = 0; i < NFFT / 2; i++)
+    {
+        float real = state->fft_buffer[i * 2];
+        float imag = state->fft_buffer[i * 2 + 1];
+        float mag = sqrtf(real * real + imag * imag);
+
+        // Adaptive Noise Tracking (VAD simplified)
+        if (mag < state->noise_profile[i] * state->vadThreshold)
+        {
+            state->noise_profile[i] = state->noise_profile[i] * state->alpha_smooth + mag * (1 - state->alpha_smooth);
+        }
+
+        // Spectral Subtraction
+        float cleanMag = mag - (state->alpha_overSub * state->noise_profile[i]);
+        if (cleanMag < state->beta_floor * state->noise_profile[i])
+            cleanMag = state->beta_floor * state->noise_profile[i];
+
+        // Apply Gain
+        float gain = (mag > 0.00001f) ? (cleanMag / mag) : 0;
+        state->fft_buffer[i * 2] *= gain;
+        state->fft_buffer[i * 2 + 1] *= gain;
+    }
+
+    // 4. Inverse FFT
+    dsps_ifft2r_fc32(state->fft_buffer, NFFT);
+    dsps_bit_rev_fc32(state->fft_buffer, NFFT);
+
+    for (int i = 0; i < FRAME_LEN; i++)
+    {
+        output[i] = state->fft_buffer[i * 2];
     }
 }

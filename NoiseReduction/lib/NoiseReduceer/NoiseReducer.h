@@ -3,31 +3,37 @@
 
 #include <stdint.h>
 #include <math.h>
+#include "dsps_fft2r.h"
 
-// Define our buffer sizes based on a 16kHz sample rate and 25ms frames
-// (Adjust these if your test .wav file uses a different sample rate)
-#define FRAME_LEN 400   // 25ms at 16kHz = 400 samples
-#define OVERLAP_LEN 200 // 50% overlap
-#define STEP_SIZE 200   // FRAME_LEN - OVERLAP_LEN
-#define NFFT 512        // Next power of 2 above 400
-#define NFFT_HALF 256   // We only process the first half of the FFT spectrum
+#define FRAME_LEN 512
+#define NFFT 512
+#define OVERLAP_LEN 256
+#define STEP_SIZE 256
 
-// The State Struct
-// This holds all the variables that need to survive between audio frames
 typedef struct
 {
-    float adaptiveNoiseProfile[NFFT_HALF];
-    float previousOverlapBuffer[OVERLAP_LEN];
-
-    // Tuning Parameters
     float alpha_overSub;
     float beta_floor;
     float alpha_smooth;
     float vadThreshold;
+
+    // ESP32 DSP requires a specific buffer alignment
+    float __attribute__((aligned(16))) fft_buffer[NFFT * 2];
+    float mag_buffer[NFFT / 2];
+    float noise_profile[NFFT / 2];
+    float window[FRAME_LEN];
 } NoiseReducer_State;
 
-// Function Prototypes
-void NoiseReducer_Init(NoiseReducer_State *state);
-void NoiseReducer_ProcessFrame(NoiseReducer_State *state, const float *inputFrame, float *outputFrame);
+#ifdef __cplusplus
+extern "C"
+{
+#endif
 
-#endif // NOISE_REDUCER_H
+    void NoiseReducer_Init(NoiseReducer_State *state);
+    void NoiseReducer_ProcessFrame(NoiseReducer_State *state, float *inputFrame, float *outputFrame);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
